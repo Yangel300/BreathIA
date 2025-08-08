@@ -2,3 +2,6 @@ kaggle.json
 /2
 /mel_balanced_dataset
 /mel_balanced_dataset_softmax
+/augmented_data
+/merged_audios
+*.csv
