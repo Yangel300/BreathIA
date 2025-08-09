@@ -4,4 +4,6 @@ kaggle.json
 /mel_balanced_dataset_softmax
 /augmented_data
 /merged_audios
-*.csv
+/multiclass
+/binary_audios
+*.zip
