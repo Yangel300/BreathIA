@@ -1,6 +1,5 @@
 import torch
 from torch import nn
-from torchsummary import summary
 from dataclasses import dataclass, field
 
 @dataclass
@@ -31,12 +30,10 @@ class NeuralNetwork(nn.Module):
           self.linnears.append(nn.ReLU())
           
       self.linnears.append(nn.Linear(j,self.output))
-      print(self.linnears)
 
 
   def forward(self, x):
       for layer in self.linnears:
           x = layer(x)
 
-      print(x)
       return x

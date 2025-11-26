@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from dataclasses import dataclass, field
+from MLP import NeuralNetwork, MLPConfig
 
 
 @dataclass
@@ -90,6 +91,7 @@ class CATConfig:
     dropout: float = 0.1
     pooling: str = "flatten"
     acoustic_cfg: AcousticAttentionBlockConfig = field(default_factory=AcousticAttentionBlockConfig)
+    mlp_config: MLPConfig = field(default_factory=MLPConfig)
 
 
 
@@ -111,13 +113,10 @@ class CAT(nn.Module):
         self.ln_attn = nn.LayerNorm(cfg.d_model)
         # Proyección para formar el "skip" de entrada (concat -> D) que se usa en el residual tras la atención
         self.res_in_proj = nn.Linear(2 * cfg.d_model, cfg.d_model)
-
         # Post-attention: LN y MLP
         self.ln_mlp = nn.LayerNorm(cfg.d_model)
-
-        # !TODO: Reemplzar la MLP por el modulo de Gerhal
-        raise ValueError("Falta definir la MLP con el modulo de Gerhal")
-        self.mlp = MLP(cfg.d_model, dropout=cfg.dropout)
+        # MLP
+        self.mlp = NeuralNetwork(cfg.mlp_config)
 
     def forward(self, x_mel: torch.Tensor, x_raw: torch.Tensor, pe3d: torch.Tensor):
         B, T, P, D = x_mel.shape
