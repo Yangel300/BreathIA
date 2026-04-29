@@ -1,3 +1,4 @@
+
 # --- Code cell ---
 
 
@@ -6,6 +7,8 @@ import os
 import json
 import librosa
 import numpy as np
+from collections import Counter
+
 
 def slice_audio_with_annotations(audio_filepath, json_filepath):
   """
@@ -70,10 +73,10 @@ def slice_audio_with_annotations(audio_filepath, json_filepath):
   return sliced_data
 
 # Define all relevant folders using existing variables from the notebook state
-wavtrainfolder1="/content/SPRSound/BioCAS2022/test2022_wav"
-wavtrainfolder2="/content/SPRSound/BioCAS2022/train2022_wav"
-wavtrainfolder3="/content/SPRSound/BioCAS2023/test2023_wav"
-wavtrainfolder4="/content/SPRSound/BioCAS2024/test2024_wav"
+wavtrainfolder1="/home/ares/Documents/BREATH/code/SPRSound/BioCAS2022/test2022_wav"
+wavtrainfolder2="/home/ares/Documents/BREATH/code/SPRSound/BioCAS2022/train2022_wav"
+wavtrainfolder3="/home/ares/Documents/BREATH/code/SPRSound/BioCAS2023/test2023_wav"
+wavtrainfolder4="/home/ares/Documents/BREATH/code/SPRSound/BioCAS2024/test2024_wav"
 
 wav_folders = [
     wavtrainfolder1,
@@ -82,11 +85,11 @@ wav_folders = [
     wavtrainfolder4
 ]
 
-jsontrainfolder1="/content/SPRSound/BioCAS2022/test2022_json/inter_test_json"
-jsontrainfolder2="/content/SPRSound/BioCAS2022/test2022_json/intra_test_json"
-jsontrainfolder3="/content/SPRSound/BioCAS2022/train2022_json"
-jsontrainfolder4="/content/SPRSound/BioCAS2023/test2023_json"
-jsontrainfolder5="/content/SPRSound/BioCAS2024/test2024_json"
+jsontrainfolder1="/home/ares/Documents/BREATH/code/SPRSound/BioCAS2022/test2022_json/inter_test_json"
+jsontrainfolder2="/home/ares/Documents/BREATH/code/SPRSound/BioCAS2022/test2022_json/intra_test_json"
+jsontrainfolder3="/home/ares/Documents/BREATH/code/SPRSound/BioCAS2022/train2022_json"
+jsontrainfolder4="/home/ares/Documents/BREATH/code/SPRSound/BioCAS2023/test2023_json"
+jsontrainfolder5="/home/ares/Documents/BREATH/code/SPRSound/BioCAS2024/test2024_json"
 json_folder_mapping = {
     wavtrainfolder1: [jsontrainfolder1, jsontrainfolder2], # BioCAS2022/test2022_wav maps to inter_test_json and intra_test_json
     wavtrainfolder2: [jsontrainfolder3], # BioCAS2022/train2022_wav maps to train2022_json
@@ -135,16 +138,6 @@ if processed_audio_data:
     print("\nNote: 'segment' contains numpy arrays, which are not fully printed for brevity.")
 else:
     print("No audio data was processed.")
-
-# --- Code cell ---
-#Segundo dataset:
-
-import kagglehub
-
-# Download latest version
-path = kagglehub.dataset_download("vbookshelf/respiratory-sound-database")
-
-print("Path to dataset files:", path)
 
 # --- Code cell ---
 
@@ -228,8 +221,7 @@ def slice_audio_from_txt_annotations(audio_filepath, txt_filepath):
 
 # --- Code cell ---
 # Path to the second dataset
-second_dataset_path = '/kaggle/input/respiratory-sound-database/Respiratory_Sound_Database/Respiratory_Sound_Database/audio_and_txt_files'
-third_dataset_path = "/kaggle/input/respiratory-sound-database/respiratory_sound_database"
+second_dataset_path = '/home/ares/.cache/kagglehub/datasets/vbookshelf/respiratory-sound-database/versions/2'
 print(f"Processing second dataset: {second_dataset_path}")
 
 # Iterate through the files in the directory
@@ -255,33 +247,6 @@ for root, _, files in os.walk(second_dataset_path):
 
 print("\nSecond dataset processing complete.")
 print(f"Total unique audio files processed including new dataset: {len(processed_audio_data)}")
-
-print(f"Processing third dataset: {third_dataset_path}")
-
-# Iterate through the files in the directory
-for root, _, files in os.walk(third_dataset_path):
-    for filename in files:
-        if filename.endswith('.wav'):
-            audio_base_filename = os.path.splitext(filename)[0]
-            audio_filepath = os.path.join(root, filename)
-            txt_filepath = os.path.join(root, audio_base_filename + '.txt')
-
-            if os.path.exists(txt_filepath):
-                print(f"  Slicing {filename} with annotation from {os.path.basename(txt_filepath)}")
-                segments_with_annotations = slice_audio_from_txt_annotations(audio_filepath, txt_filepath)
-                if segments_with_annotations:
-                    # Append to the existing processed_audio_data dictionary
-                    # If a key already exists, this will overwrite it.
-                    # If you want to merge, you might need a different structure.
-                    processed_audio_data[audio_base_filename] = segments_with_annotations
-                else:
-                    print(f"    No segments found or error for {audio_base_filename}")
-            else:
-                print(f"  No TXT annotation found for {filename}. Skipping.")
-
-print("\nThird dataset processing complete.")
-print(f"Total unique audio files processed including new dataset: {len(processed_audio_data)}")
-
 
 # Display a sample of the processed data to verify
 if processed_audio_data:
@@ -406,7 +371,7 @@ import json
 import numpy as np # Import numpy
 
 filename = f"segment_{i:06d}.json"
-output_folder="/content/data_augmentation"
+output_folder="/home/ares/Documents/BREATH/code/BreathIA/Augmented"
 
 # Ensure the output directory exists
 os.makedirs(output_folder, exist_ok=True)
