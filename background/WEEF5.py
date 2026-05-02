@@ -21,8 +21,8 @@ def load_segments_from_folder(folder):
                 # Extract event type robustly
                 if "Normal" in file:
                     event_type = "Normal"
-                elif "Wheeze+Crackle" in file:
-                    event_type = "Wheeze+Crackle"
+                elif "wheeze+crackle" in file:
+                    event_type = "wheeze+crackle"
                 elif "Wheeze" in file:
                     event_type = "Wheeze"
                 elif "Crackle" in file:
@@ -109,7 +109,7 @@ def augment_from_folder(input_folder, output_folder, target_count=2000):
                 augmented,
                 original['sr'],
                 event_type,
-                output_folder,   # 👈 NOW SAVES HERE
+                output_folder,   
                 counter
             )
 
@@ -118,13 +118,28 @@ def augment_from_folder(input_folder, output_folder, target_count=2000):
     return total_augmented
 
 
-segments = load_segments_from_folder("segments_wav")
+def run_augmentation(input_folder, output_folder, target_count=1000):
+    print("=" * 60)
+    print("Starting Data Augmentation")
+    print("=" * 60)
 
-augmented = augment_from_folder(
-    input_folder="segments_wav_3",
-    output_folder="augmented_wav_3",
-    target_count=2000
-)
+    # Load segments (if needed for metadata)
+    segments = load_segments_from_folder(input_folder)
 
-print("Augmented samples:", augmented)
+    print(f"Loaded segments: {len(segments)}")
 
+    augmented = augment_from_folder(
+        input_folder=input_folder,
+        output_folder=output_folder,
+        target_count=target_count
+    )
+
+    print(f"Augmented samples: {augmented}")
+
+    return augmented
+
+if __name__ == "__main__":
+    input_folder = "/home/ares/Documents/BREATH/code/Segments_wav_4"
+    output_folder = "/home/ares/Documents/BREATH/code/Augmented_Segments_wav_4"
+
+    run_augmentation(input_folder, output_folder, target_count=1000)
