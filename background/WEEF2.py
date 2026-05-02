@@ -39,9 +39,30 @@ def process_sprsoound_dataset(wav_folders, json_folder_mapping, output_folder, c
 
     return counter
 
+def hann_fade(audio, sr, fade_ms=20):
+    fade_samples = int(sr * fade_ms / 1000)
+
+    # Avoid issues with very short segments
+    if len(audio) < 2 * fade_samples:
+        return audio
+
+    hann = np.hanning(2 * fade_samples)
+
+    fade_in = hann[:fade_samples]
+    fade_out = hann[fade_samples:]
+
+    audio[:fade_samples] *= fade_in
+    audio[-fade_samples:] *= fade_out
+
+    return audio
+
 def save_segment_wav(y_segment, sr, event_type, output_folder, counter):
     os.makedirs(output_folder, exist_ok=True)
 
+    #Apply Hann fade BEFORE normalization
+    y_segment = hann_fade(y_segment, sr, fade_ms=20)
+
+    # Normalize
     max_val = np.max(np.abs(y_segment)) + 1e-9
     y_segment = y_segment / max_val
 
@@ -51,6 +72,33 @@ def save_segment_wav(y_segment, sr, event_type, output_folder, counter):
     sf.write(filepath, y_segment, sr)
 
     return counter + 1
+def enforce_min_duration(y_full, start_sample, end_sample, sr, min_duration=0.8):
+    min_samples = int(min_duration * sr)
+    current_len = end_sample - start_sample
+
+    if current_len >= min_samples:
+        return start_sample, end_sample
+
+    # Center expansion
+    center = (start_sample + end_sample) // 2
+    half_needed = min_samples // 2
+
+    new_start = center - half_needed
+    new_end = center + half_needed
+
+    # Clamp to valid range
+    if new_start < 0:
+        new_start = 0
+        new_end = min_samples
+    if new_end > len(y_full):
+        new_end = len(y_full)
+        new_start = len(y_full) - min_samples
+
+    # Final check (still too short → skip)
+    if new_start < 0 or new_end > len(y_full) or (new_end - new_start) < min_samples:
+        return None, None
+
+    return new_start, new_end
 
 def slice_audio_with_annotations(audio_filepath, json_filepath, output_folder, counter):
     try:
@@ -74,9 +122,13 @@ def slice_audio_with_annotations(audio_filepath, json_filepath, output_folder, c
 
         start_sample = int(start_ms / 1000 * sr_full)
         end_sample = int(end_ms / 1000 * sr_full)
-
         if start_sample < end_sample:
-            y_segment = y_full[start_sample:end_sample]
+            start_sample, end_sample =enforce_min_duration(y_full,start_sample, end_sample, sr_full, min_duration=0.8)
+
+            if start_sample is None:
+                continue
+
+            y_segment= y_full[start_sample:end_sample]
 
             counter = save_segment_wav(y_segment, sr_full, event_type, output_folder, counter)
 
@@ -112,7 +164,7 @@ def slice_audio_from_txt_annotations(audio_filepath, txt_filepath, output_folder
 
                 event_type = 'Normal'
                 if has_wheeze and has_crackle:
-                    event_type = 'Wheeze+Crackle'
+                    event_type = 'wheeze+crackle'
                 elif has_wheeze:
                     event_type = 'Wheeze'
                 elif has_crackle:
@@ -122,9 +174,15 @@ def slice_audio_from_txt_annotations(audio_filepath, txt_filepath, output_folder
                 end_sample = int(end_time_s * sr_full)
 
                 if start_sample < end_sample:
+                    start_sample, end_sample =enforce_min_duration(y_full,start_sample, end_sample, sr_full, min_duration=0.8)
+
+                    if start_sample is None:
+                        continue
+
+
                     y_segment = y_full[start_sample:end_sample]
 
-                    # 🔥 SAVE WAV
+                    
                     counter = save_segment_wav(y_segment, sr_full, event_type, output_folder, counter)
 
                     sliced_data.append({
@@ -240,12 +298,11 @@ def save_segments_to_json(segments_list, output_folder="Data_Augmentation2"):
     print(f"\nSaved {len(segments_list)} JSON files in '{output_folder}'")
 
 
-def main():
+def run_slicing(output_folder):
     print("=" * 60)
     print("Starting Audio Dataset Processing")
     print("=" * 60)
 
-    output_folder = "segments_wav_3"
     segment_counter = 0
 
     # =========================
@@ -254,20 +311,20 @@ def main():
     print("\n[1/2] Processing SPRSound dataset...")
 
     wav_folders = [
-        r"C:\Users\ADMIN\Documents\BREATH-IA\BreathIA\SPRSound\BioCAS2022\test2022_wav",
-        r"C:\Users\ADMIN\Documents\BREATH-IA\BreathIA\SPRSound\BioCAS2022\train2022_wav",
-        r"C:\Users\ADMIN\Documents\BREATH-IA\BreathIA\SPRSound\BioCAS2023\test2023_wav",
-        r"C:\Users\ADMIN\Documents\BREATH-IA\BreathIA\SPRSound\BioCAS2024\test2024_wav"
+        "/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2022/test2022_wav",
+        "/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2022/train2022_wav",
+        "/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2023/test2023_wav",
+        "/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2024/test2024_wav"
     ]
 
     json_folder_mapping = {
         wav_folders[0]: [
-            r"C:\Users\ADMIN\Documents\BREATH-IA\BreathIA\SPRSound\BioCAS2022\test2022_json\inter_test_json",
-            r"C:\Users\ADMIN\Documents\BREATH-IA\BreathIA\SPRSound\BioCAS2022\test2022_json\intra_test_json"
+            "/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2022/test2022_json/inter_test_json",
+            "/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2022/test2022_json/intra_test_json"
         ],
-        wav_folders[1]: [r"C:\Users\ADMIN\Documents\BREATH-IA\BreathIA\SPRSound\BioCAS2022\train2022_json"],
-        wav_folders[2]: [r"C:\Users\ADMIN\Documents\BREATH-IA\BreathIA\SPRSound\BioCAS2023\test2023_json"],
-        wav_folders[3]: [r"C:\Users\ADMIN\Documents\BREATH-IA\BreathIA\SPRSound\BioCAS2024\test2024_json"]
+        wav_folders[1]: ["/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2022/train2022_json"],
+        wav_folders[2]: ["/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2022/test2023_json"],
+        wav_folders[3]: ["/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2024/test2024_json"]
     }
 
     segment_counter = process_sprsoound_dataset(wav_folders,json_folder_mapping,output_folder,segment_counter)
@@ -279,36 +336,25 @@ def main():
     # =========================
     print("\n[2/2] Processing Respiratory Sound Database...")
 
-    try:
-        path = kagglehub.dataset_download("vbookshelf/respiratory-sound-database")
+    path = kagglehub.dataset_download("vbookshelf/respiratory-sound-database")
 
-        second_dataset_path = os.path.join(
-            path,
-            'Respiratory_Sound_Database/Respiratory_Sound_Database/audio_and_txt_files'
-        )
+    second_dataset_path = os.path.join(
+        path,
+        'Respiratory_Sound_Database/Respiratory_Sound_Database/audio_and_txt_files'
+    )
 
-        third_dataset_path = os.path.join(
-            path,
-            'respiratory_sound_database'
-        )
 
-        segment_counter = process_respiratory_database(
-            second_dataset_path,
-            output_folder,
-            segment_counter
-        )
+    segment_counter = process_respiratory_database(
+        second_dataset_path,
+        output_folder,
+        segment_counter
+    )
 
-        segment_counter = process_respiratory_database(
-            third_dataset_path,
-            output_folder,
-            segment_counter
-        )
+    print(f"Total segments saved: {segment_counter}")
 
-        print(f"Total segments saved: {segment_counter}")
-
-    except Exception as e:
-        print(f"Error: {e}")
+    return segment_counter
 
 
 if __name__ == "__main__":
-    main()
+    output_folder = "/home/ares/Documents/BREATH/code/Segments_wav_4"
+    run_slicing(output_folder)
