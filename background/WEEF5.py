@@ -1,115 +1,175 @@
 import os
+import sys
 import librosa
 import random
-import os
-import json
 import numpy as np
-import pandas as pd
-from collections import Counter
-import pickle
 import soundfile as sf
+from collections import Counter
+
+# =========================================
+# PATH BASE (evita problemas de rutas)
+# =========================================
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+# =========================================
+# UTILIDADES
+# =========================================
+def ensure_dir(path):
+    if not os.path.exists(path):
+        print(f"[INFO] Creating directory: {path}")
+        os.makedirs(path, exist_ok=True)
+
+
+# =========================================
+# LOAD SEGMENTS
+# =========================================
 def load_segments_from_folder(folder):
     segments_list = []
 
+    if not os.path.exists(folder):
+        print(f"[ERROR] Folder does not exist: {folder}")
+        return segments_list
+
     for file in os.listdir(folder):
-        if file.endswith(".wav"):
-            filepath = os.path.join(folder, file)
+        if not file.endswith(".wav"):
+            continue
 
-            try:
-                y, sr = librosa.load(filepath, sr=None)
+        filepath = os.path.join(folder, file)
 
-                # Extract event type robustly
-                if "Normal" in file:
-                    event_type = "Normal"
-                elif "wheeze+crackle" in file:
-                    event_type = "wheeze+crackle"
-                elif "Wheeze" in file:
-                    event_type = "Wheeze"
-                elif "Crackle" in file:
-                    event_type = "Crackle"
-                elif "Rhonchi" in file:
-                    event_type = "Rhonchi"
-                elif "Stridor" in file:
-                    event_type = "Stridor"
-                else:
-                    continue
+        try:
+            y, sr = librosa.load(filepath, sr=None)
 
-                segments_list.append({
-                    'segment': y,
-                    'event_type': event_type,
-                    'sr': sr
-                })
+            # Clasificación robusta
+            name = file.lower()
+            if "normal" in name:
+                event_type = "Normal"
+            elif "wheeze" in name:
+                event_type = "Wheeze"
+            elif "crackle" in name:
+                event_type = "Crackle"
+            else:
+                continue
 
-            except:
-                pass
+            segments_list.append({
+                'segment': y,
+                'event_type': event_type,
+                'sr': sr
+            })
+
+        except Exception as e:
+            print(f"[WARN] Failed loading {file}: {e}")
 
     return segments_list
+
+
+# =========================================
+# AUGMENTATION
+# =========================================
 def augment_audio_segment(segment, sr, max_augmentations=3):
-    """Apply random augmentation to audio segment."""
-    augmented_segment = segment.copy()
-    num_augmentations = random.randint(1, max_augmentations)
-    augmentation_types = ['add_noise', 'pitch_shift', 'time_stretch']
-    random.shuffle(augmentation_types)
+    augmented = segment.copy()
 
-    for i in range(num_augmentations):
-        aug_type = augmentation_types[i % len(augmentation_types)]
+    num_aug = random.randint(1, max_augmentations)
+    aug_types = ['add_noise', 'pitch_shift', 'time_stretch']
+    random.shuffle(aug_types)
 
-        if aug_type == 'add_noise':
-            noise_amplitude = 0.005 * random.uniform(0.5, 2.0)
-            augmented_segment += noise_amplitude * np.random.randn(len(augmented_segment))
-        elif aug_type == 'pitch_shift':
-            n_steps = random.uniform(-1, 1)
-            augmented_segment = librosa.effects.pitch_shift(y=augmented_segment, sr=sr, n_steps=n_steps)
-        elif aug_type == 'time_stretch':
-            rate = random.uniform(0.9, 1.1)
-            if len(augmented_segment) < sr // 5:
-                pad_length = sr // 5 - len(augmented_segment)
-                augmented_segment = np.pad(augmented_segment, (0, pad_length), 'constant')
-            augmented_segment = librosa.effects.time_stretch(y=augmented_segment, rate=rate)
+    for i in range(num_aug):
+        aug = aug_types[i % len(aug_types)]
 
-    return augmented_segment
+        try:
+            if aug == 'add_noise':
+                noise_amp = 0.005 * random.uniform(0.5, 2.0)
+                augmented += noise_amp * np.random.randn(len(augmented))
+
+            elif aug == 'pitch_shift':
+                steps = random.uniform(-1, 1)
+                augmented = librosa.effects.pitch_shift(
+                    y=augmented, sr=sr, n_steps=steps
+                )
+
+            elif aug == 'time_stretch':
+                rate = random.uniform(0.9, 1.1)
+
+                if len(augmented) < sr // 5:
+                    pad = sr // 5 - len(augmented)
+                    augmented = np.pad(augmented, (0, pad))
+
+                augmented = librosa.effects.time_stretch(
+                    y=augmented, rate=rate
+                )
+
+        except Exception as e:
+            print(f"[WARN] Augmentation error: {e}")
+
+    return augmented
+
+
+# =========================================
+# SAVE
+# =========================================
 def save_segment_wav(y_segment, sr, event_type, output_folder, counter):
-    os.makedirs(output_folder, exist_ok=True)
+    ensure_dir(output_folder)
 
+    # Normalización segura
     max_val = np.max(np.abs(y_segment)) + 1e-9
     y_segment = y_segment / max_val
 
     filename = f"segment_{counter:06d}_{event_type}.wav"
     filepath = os.path.join(output_folder, filename)
 
-    sf.write(filepath, y_segment, sr)
+    try:
+        sf.write(filepath, y_segment, sr)
+    except Exception as e:
+        print(f"[ERROR] Failed saving {filepath}: {e}")
+        return counter
 
     return counter + 1
-def augment_from_folder(input_folder, output_folder, target_count=2000):
-    from collections import Counter
-    import os
 
+
+# =========================================
+# AUGMENT FROM FOLDER
+# =========================================
+def augment_from_folder(input_folder, output_folder, target_count):
     segments = load_segments_from_folder(input_folder)
-    counts = Counter(s['event_type'] for s in segments)
 
-    os.makedirs(output_folder, exist_ok=True)
+    if len(segments) == 0:
+        print("[ERROR] No segments loaded. Abort.")
+        return 0
+
+    counts = Counter(s['event_type'] for s in segments)
+    print(f"[INFO] Current counts: {dict(counts)}")
+
+    ensure_dir(output_folder)
 
     counter = 0
     total_augmented = 0
 
     for event_type, count in counts.items():
+        print(f"[INFO] Processing {event_type}: current {count}, target {target_count}")
         if count >= target_count:
             continue
 
         needed = target_count - count
-        print(f"{event_type}: need {needed}")
+        print(f"[INFO] {event_type}: need {needed}")
 
         candidates = [s for s in segments if s['event_type'] == event_type]
 
+        if len(candidates) == 0:
+            continue
+
         for _ in range(needed):
             original = random.choice(candidates)
-            augmented = augment_audio_segment(original['segment'], original['sr'])
+
+            augmented = augment_audio_segment(
+                original['segment'],
+                original['sr']
+            )
 
             counter = save_segment_wav(
                 augmented,
                 original['sr'],
                 event_type,
-                output_folder,   
+                output_folder,
                 counter
             )
 
@@ -118,15 +178,22 @@ def augment_from_folder(input_folder, output_folder, target_count=2000):
     return total_augmented
 
 
-def run_augmentation(input_folder, output_folder, target_count=1000):
+# =========================================
+# MAIN PIPELINE
+# =========================================
+def run_augmentation(input_folder, output_folder, target_count):
     print("=" * 60)
-    print("Starting Data Augmentation")
+    print("STARTING DATA AUGMENTATION")
     print("=" * 60)
 
-    # Load segments (if needed for metadata)
+    input_folder = os.path.abspath(input_folder)
+    output_folder = os.path.abspath(output_folder)
+
+    print(f"[INFO] Input:  {input_folder}")
+    print(f"[INFO] Output: {output_folder}")
+
     segments = load_segments_from_folder(input_folder)
-
-    print(f"Loaded segments: {len(segments)}")
+    print(f"[INFO] Loaded segments: {len(segments)}")
 
     augmented = augment_from_folder(
         input_folder=input_folder,
@@ -134,12 +201,16 @@ def run_augmentation(input_folder, output_folder, target_count=1000):
         target_count=target_count
     )
 
-    print(f"Augmented samples: {augmented}")
+    print(f"[DONE] Augmented samples: {augmented}")
 
     return augmented
 
-if __name__ == "__main__":
-    input_folder = "/home/ares/Documents/BREATH/code/Segments_wav_4"
-    output_folder = "/home/ares/Documents/BREATH/code/Augmented_Segments_wav_4"
 
-    run_augmentation(input_folder, output_folder, target_count=1000)
+# =========================================
+# ENTRYPOINT
+# =========================================
+if __name__ == "__main__":
+    INPUT = os.path.join(CURRENT_DIR, "Segments_wav_4")
+    OUTPUT = os.path.join(CURRENT_DIR, "Augmented_Segments_wav_4")
+
+    run_augmentation(INPUT, OUTPUT, target_count=4000)

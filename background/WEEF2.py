@@ -1,68 +1,52 @@
 import os
+import sys
 import json
 import librosa
 import numpy as np
-import pandas as pd
 import kagglehub
-from collections import Counter
 import random
-import pickle
 import soundfile as sf
-#a
+from collections import Counter
 
-segment_counter = 0
+# =========================================
+# PATH BASE (clave para evitar errores)
+# =========================================
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATASET_BASE = os.path.join(CURRENT_DIR, "datasets")
+print(CURRENT_DIR)
+os.makedirs(DATASET_BASE, exist_ok=True)
 
-def process_sprsoound_dataset(wav_folders, json_folder_mapping, output_folder, counter):
-    for wav_folder in wav_folders:
-        print(f"Processing folder: {wav_folder}")
 
-        for root, _, files in os.walk(wav_folder):
-            for filename in files:
-                if filename.endswith(".wav"):
-                    base = os.path.splitext(filename)[0]
-                    audio_path = os.path.join(root, filename)
+# =========================================
+# UTILIDADES
+# =========================================
+def ensure_dir(path):
+    if not os.path.exists(path):
+        print(f"[INFO] Creating directory: {path}")
+        os.makedirs(path, exist_ok=True)
 
-                    json_path = None
-                    for json_folder in json_folder_mapping.get(wav_folder, []):
-                        candidate = os.path.join(json_folder, base + ".json")
-                        if os.path.exists(candidate):
-                            json_path = candidate
-                            break
 
-                    if json_path:
-                        _, counter = slice_audio_with_annotations(
-                            audio_path,
-                            json_path,
-                            output_folder,
-                            counter
-                        )
-
-    return counter
-
+# =========================================
+# AUDIO HELPERS
+# =========================================
 def hann_fade(audio, sr, fade_ms=20):
     fade_samples = int(sr * fade_ms / 1000)
 
-    # Avoid issues with very short segments
     if len(audio) < 2 * fade_samples:
         return audio
 
     hann = np.hanning(2 * fade_samples)
-
-    fade_in = hann[:fade_samples]
-    fade_out = hann[fade_samples:]
-
-    audio[:fade_samples] *= fade_in
-    audio[-fade_samples:] *= fade_out
+    audio[:fade_samples] *= hann[:fade_samples]
+    audio[-fade_samples:] *= hann[fade_samples:]
 
     return audio
 
+
 def save_segment_wav(y_segment, sr, event_type, output_folder, counter):
-    os.makedirs(output_folder, exist_ok=True)
+    ensure_dir(output_folder)
 
-    #Apply Hann fade BEFORE normalization
-    y_segment = hann_fade(y_segment, sr, fade_ms=20)
+    y_segment = hann_fade(y_segment, sr)
 
-    # Normalize
     max_val = np.max(np.abs(y_segment)) + 1e-9
     y_segment = y_segment / max_val
 
@@ -72,6 +56,8 @@ def save_segment_wav(y_segment, sr, event_type, output_folder, counter):
     sf.write(filepath, y_segment, sr)
 
     return counter + 1
+
+
 def enforce_min_duration(y_full, start_sample, end_sample, sr, min_duration=0.8):
     min_samples = int(min_duration * sr)
     current_len = end_sample - start_sample
@@ -79,282 +65,244 @@ def enforce_min_duration(y_full, start_sample, end_sample, sr, min_duration=0.8)
     if current_len >= min_samples:
         return start_sample, end_sample
 
-    # Center expansion
     center = (start_sample + end_sample) // 2
-    half_needed = min_samples // 2
+    half = min_samples // 2
 
-    new_start = center - half_needed
-    new_end = center + half_needed
+    new_start = max(0, center - half)
+    new_end = min(len(y_full), center + half)
 
-    # Clamp to valid range
-    if new_start < 0:
-        new_start = 0
-        new_end = min_samples
-    if new_end > len(y_full):
-        new_end = len(y_full)
-        new_start = len(y_full) - min_samples
-
-    # Final check (still too short → skip)
-    if new_start < 0 or new_end > len(y_full) or (new_end - new_start) < min_samples:
+    if (new_end - new_start) < min_samples:
         return None, None
 
     return new_start, new_end
 
+
+# =========================================
+# SLICING JSON
+# =========================================
 def slice_audio_with_annotations(audio_filepath, json_filepath, output_folder, counter):
     try:
         with open(json_filepath, 'r') as f:
             json_data = json.load(f)
-    except:
+    except Exception as e:
+        print(f"[WARN] JSON error: {json_filepath} -> {e}")
         return [], counter
 
     try:
         y_full, sr_full = librosa.load(audio_filepath, sr=None)
-    except:
+    except Exception as e:
+        print(f"[WARN] Audio load error: {audio_filepath} -> {e}")
         return [], counter
 
-    event_annotations = json_data.get('event_annotation', [])
     sliced_data = []
 
-    for event in event_annotations:
+    for event in json_data.get('event_annotation', []):
         start_ms = int(event.get('start', 0))
         end_ms = int(event.get('end', 0))
-        event_type = event.get('type', 'Unknown')
+        raw_type = event.get('type', 'Unknown').lower()
 
-        start_sample = int(start_ms / 1000 * sr_full)
-        end_sample = int(end_ms / 1000 * sr_full)
-        if start_sample < end_sample:
-            start_sample, end_sample =enforce_min_duration(y_full,start_sample, end_sample, sr_full, min_duration=0.8)
+        if "wheeze" in raw_type:
+            event_type = "Wheeze"
+        elif "crackle" in raw_type:
+            event_type = "Crackle"
+        elif "normal" in raw_type:
+            event_type = "Normal"
+        else:
+            continue
 
-            if start_sample is None:
+        start = int(start_ms / 1000 * sr_full)
+        end = int(end_ms / 1000 * sr_full)
+
+        if start < end:
+            start, end = enforce_min_duration(y_full, start, end, sr_full)
+
+            if start is None:
                 continue
 
-            y_segment= y_full[start_sample:end_sample]
+            y_segment = y_full[start:end]
 
-            counter = save_segment_wav(y_segment, sr_full, event_type, output_folder, counter)
+            counter = save_segment_wav(
+                y_segment, sr_full, event_type, output_folder, counter
+            )
 
-            sliced_data.append({
-                'event_type': event_type
-            })
-
-    return sliced_data, counter
-
-
-def slice_audio_from_txt_annotations(audio_filepath, txt_filepath, output_folder, counter):
-    sliced_data = []
-
-    try:
-        y_full, sr_full = librosa.load(audio_filepath, sr=None)
-    except:
-        return [], counter
-
-    try:
-        with open(txt_filepath, 'r') as f:
-            lines = f.readlines()
-    except:
-        return [], counter
-
-    for line in lines:
-        parts = line.strip().split('\t')
-        if len(parts) == 4:
-            try:
-                start_time_s = float(parts[0])
-                end_time_s = float(parts[1])
-                has_wheeze = int(parts[2])
-                has_crackle = int(parts[3])
-
-                event_type = 'Normal'
-                if has_wheeze and has_crackle:
-                    event_type = 'wheeze+crackle'
-                elif has_wheeze:
-                    event_type = 'Wheeze'
-                elif has_crackle:
-                    event_type = 'Crackle'
-
-                start_sample = int(start_time_s * sr_full)
-                end_sample = int(end_time_s * sr_full)
-
-                if start_sample < end_sample:
-                    start_sample, end_sample =enforce_min_duration(y_full,start_sample, end_sample, sr_full, min_duration=0.8)
-
-                    if start_sample is None:
-                        continue
-
-
-                    y_segment = y_full[start_sample:end_sample]
-
-                    
-                    counter = save_segment_wav(y_segment, sr_full, event_type, output_folder, counter)
-
-                    sliced_data.append({
-                        'event_type': event_type
-                    })
-
-            except:
-                pass
+            sliced_data.append({'event_type': event_type})
 
     return sliced_data, counter
 
 
-def augment_audio_segment(segment, sr, max_augmentations=3):
-    """Apply random augmentation to audio segment."""
-    augmented_segment = segment.copy()
-    num_augmentations = random.randint(1, max_augmentations)
-    augmentation_types = ['add_noise', 'pitch_shift', 'time_stretch']
-    random.shuffle(augmentation_types)
+# =========================================
+# DATASET SPRSOUND
+# =========================================
+def process_sprsound_dataset(basepath, output_folder, counter):
+    print(f"[INFO] Using SPRSound basepath: {basepath}")
 
-    for i in range(num_augmentations):
-        aug_type = augmentation_types[i % len(augmentation_types)]
+    wav_folders = [
+        os.path.join(basepath, "BioCAS2022/test2022_wav"),
+        os.path.join(basepath, "BioCAS2022/train2022_wav"),
+        os.path.join(basepath, "BioCAS2023/test2023_wav"),
+        os.path.join(basepath, "BioCAS2024/test2024_wav"),
+    ]
 
-        if aug_type == 'add_noise':
-            noise_amplitude = 0.005 * random.uniform(0.5, 2.0)
-            augmented_segment += noise_amplitude * np.random.randn(len(augmented_segment))
-        elif aug_type == 'pitch_shift':
-            n_steps = random.uniform(-1, 1)
-            augmented_segment = librosa.effects.pitch_shift(y=augmented_segment, sr=sr, n_steps=n_steps)
-        elif aug_type == 'time_stretch':
-            rate = random.uniform(0.9, 1.1)
-            if len(augmented_segment) < sr // 5:
-                pad_length = sr // 5 - len(augmented_segment)
-                augmented_segment = np.pad(augmented_segment, (0, pad_length), 'constant')
-            augmented_segment = librosa.effects.time_stretch(y=augmented_segment, rate=rate)
+    json_mapping = {
+        wav_folders[0]: [
+            os.path.join(basepath, "BioCAS2022/test2022_json/inter_test_json"),
+            os.path.join(basepath, "BioCAS2022/test2022_json/intra_test_json"),
+        ],
+        wav_folders[1]: [os.path.join(basepath, "BioCAS2022/train2022_json")],
+        wav_folders[2]: [os.path.join(basepath, "BioCAS2023/test2023_json")],
+        wav_folders[3]: [os.path.join(basepath, "BioCAS2024/test2024_json")],
+    }
 
-    return augmented_segment
+    for wav_folder in wav_folders:
+        if not os.path.exists(wav_folder):
+            print(f"[WARN] Missing folder: {wav_folder}")
+            continue
+
+        for root, _, files in os.walk(wav_folder):
+            for file in files:
+                if file.endswith(".wav"):
+                    base = os.path.splitext(file)[0]
+                    audio_path = os.path.join(root, file)
+
+                    json_path = None
+                    for jf in json_mapping.get(wav_folder, []):
+                        candidate = os.path.join(jf, base + ".json")
+                        if os.path.exists(candidate):
+                            json_path = candidate
+                            break
+
+                    if json_path:
+                        _, counter = slice_audio_with_annotations(
+                            audio_path, json_path, output_folder, counter
+                        )
+
+    return counter
 
 
-
+# =========================================
+# RESPIRATORY DATASET
+# =========================================
 def process_respiratory_database(dataset_path, output_folder, counter):
-    processed_data = {}
-
     for root, _, files in os.walk(dataset_path):
-        for filename in files:
-            if filename.endswith('.wav'):
-                base = os.path.splitext(filename)[0]
-                audio_path = os.path.join(root, filename)
-                txt_path = os.path.join(root, base + '.txt')
+        for file in files:
+            if file.endswith(".wav"):
+                base = os.path.splitext(file)[0]
+                audio = os.path.join(root, file)
+                txt = os.path.join(root, base + ".txt")
 
-                if os.path.exists(txt_path):
-                    segments, counter = slice_audio_from_txt_annotations(
-                        audio_path,
-                        txt_path,
-                        output_folder,
-                        counter
+                if os.path.exists(txt):
+                    _, counter = slice_audio_from_txt_annotations(
+                        audio, txt, output_folder, counter
                     )
 
     return counter
 
 
-def perform_augmentation(segments_list, target_count=2000):
-    """Perform data augmentation to balance classes."""
-    current_counts = Counter(seg['event_type'] for seg in segments_list)
-    classes_to_augment = ['Wheeze', 'Fine Crackle', 'Coarse Crackle', 'Rhonchi', 'Wheeze+Crackle', 'Stridor', 'Crackle']
+def slice_audio_from_txt_annotations(audio_filepath, txt_filepath, output_folder, counter):
+    try:
+        y_full, sr_full = librosa.load(audio_filepath, sr=None)
+    except Exception as e:
+        print(f"[WARN] Audio error: {e}")
+        return [], counter
 
-    segments_by_type = {event_type: [] for event_type in current_counts.keys()}
-    for segment_info in segments_list:
-        segments_by_type[segment_info['event_type']].append(segment_info)
+    try:
+        with open(txt_filepath, 'r') as f:
+            lines = f.readlines()
+    except Exception as e:
+        print(f"[WARN] TXT error: {e}")
+        return [], counter
 
-    augmented_count = 0
-    for event_type in classes_to_augment:
-        if event_type not in current_counts:
+    for line in lines:
+        parts = line.strip().split('\t')
+        if len(parts) != 4:
             continue
-        current_count = current_counts[event_type]
-        needed_samples = target_count - current_count
 
-        if needed_samples > 0:
-            print(f"Augmenting {event_type}: Need {needed_samples} samples")
-            for _ in range(needed_samples):
-                original = random.choice(segments_by_type[event_type])
-                augmented_wav = augment_audio_segment(original['segment'], sr=original['sr'])
-                segments_list.append({
-                    'segment': augmented_wav,
-                    'event_type': original['event_type'],
-                    'start_ms': original['start_ms'],
-                    'end_ms': original['end_ms'],
-                    'sr': original['sr']
-                })
-                augmented_count += 1
+        try:
+            start = float(parts[0])
+            end = float(parts[1])
+            wheeze = int(parts[2])
+            crackle = int(parts[3])
 
-    return augmented_count
+            if wheeze and crackle:
+                continue
+            elif wheeze:
+                event = "Wheeze"
+            elif crackle:
+                event = "Crackle"
+            else:
+                event = "Normal"
 
-def save_segments_to_json(segments_list, output_folder="Data_Augmentation2"):
-    """Save each segment as an individual JSON file."""
-    os.makedirs(output_folder, exist_ok=True)
+            s = int(start * sr_full)
+            e = int(end * sr_full)
 
-    for i, seg in enumerate(segments_list):
-        json_data = {
-            "event_type": seg["event_type"],
-            "start_ms": seg["start_ms"],
-            "end_ms": seg["end_ms"],
-            "sr": seg["sr"],
-            # Convert numpy array → list for JSON serialization
-            "signal": seg["segment"].tolist()
-        }
+            s, e = enforce_min_duration(y_full, s, e, sr_full)
+            if s is None:
+                continue
 
-        filename = f"segment_{i:06d}.json"
-        filepath = os.path.join(output_folder, filename)
+            counter = save_segment_wav(
+                y_full[s:e], sr_full, event, output_folder, counter
+            )
 
-        with open(filepath, "w") as f:
-            json.dump(json_data, f)
+        except Exception:
+            continue
 
-    print(f"\nSaved {len(segments_list)} JSON files in '{output_folder}'")
+    return [], counter
 
 
-def run_slicing(output_folder):
+# =========================================
+# MAIN PIPELINE
+# =========================================
+def run_slicing(output_folder, sprsound_path=None):
     print("=" * 60)
-    print("Starting Audio Dataset Processing")
+    print("STARTING DATASET PIPELINE")
     print("=" * 60)
 
-    segment_counter = 0
+    ensure_dir(output_folder)
 
-    # =========================
-    # 1. SPRSound
-    # =========================
-    print("\n[1/2] Processing SPRSound dataset...")
+    counter = 0
 
-    wav_folders = [
-        "/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2022/test2022_wav",
-        "/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2022/train2022_wav",
-        "/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2023/test2023_wav",
-        "/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2024/test2024_wav"
-    ]
+    # -------------------------
+    # SPRSound
+    # -------------------------
+    if sprsound_path is None:
+        sprsound_path = os.path.join(DATASET_BASE, "SPRSound")
 
-    json_folder_mapping = {
-        wav_folders[0]: [
-            "/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2022/test2022_json/inter_test_json",
-            "/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2022/test2022_json/intra_test_json"
-        ],
-        wav_folders[1]: ["/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2022/train2022_json"],
-        wav_folders[2]: ["/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2022/test2023_json"],
-        wav_folders[3]: ["/home/ares/Documents/BREATH/code/BreathIA/SPRSound/BioCAS2024/test2024_json"]
-    }
+    if os.path.exists(sprsound_path):
+        counter = process_sprsound_dataset(
+            sprsound_path,
+            output_folder,
+            counter
+        )
+    else:
+        print(f"[WARN] SPRSound not found at {sprsound_path}")
 
-    segment_counter = process_sprsoound_dataset(wav_folders,json_folder_mapping,output_folder,segment_counter)
+    print(f"[INFO] Segments after SPRSound: {counter}")
 
-    print(f"Segments after SPRSound: {segment_counter}")
-
-    # =========================
-    # 2. Respiratory DB
-    # =========================
-    print("\n[2/2] Processing Respiratory Sound Database...")
-
+    # -------------------------
+    # Respiratory DB (Kaggle)
+    # -------------------------
+    print("[INFO] Downloading Respiratory DB...")
     path = kagglehub.dataset_download("vbookshelf/respiratory-sound-database")
 
-    second_dataset_path = os.path.join(
+    dataset_path = os.path.join(
         path,
-        'Respiratory_Sound_Database/Respiratory_Sound_Database/audio_and_txt_files'
+        "Respiratory_Sound_Database/Respiratory_Sound_Database/audio_and_txt_files"
     )
 
-
-    segment_counter = process_respiratory_database(
-        second_dataset_path,
+    counter = process_respiratory_database(
+        dataset_path,
         output_folder,
-        segment_counter
+        counter
     )
 
-    print(f"Total segments saved: {segment_counter}")
+    print(f"[DONE] Total segments: {counter}")
 
-    return segment_counter
+    return counter
 
 
+# =========================================
+# ENTRYPOINT
+# =========================================
 if __name__ == "__main__":
-    output_folder = "/home/ares/Documents/BREATH/code/Segments_wav_4"
-    run_slicing(output_folder)
+    OUTPUT = os.path.join(CURRENT_DIR, "Segments_wav_4")
+    run_slicing(OUTPUT)
