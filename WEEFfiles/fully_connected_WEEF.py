@@ -4,6 +4,61 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 import numpy as np
 import librosa
+import os
+
+audio_folder = 'folder/entrada' # <--- Ruta a los .wav
+
+# DURACIÓN DEL SEGMENTO 
+segment_length_sec = 3
+sr = 22050 #Ponerlo desde el inicio
+
+processed_audio_data = {}
+
+print(f"Iniciando procesamiento")
+
+if not os.path.exists(audio_folder):
+    print(f"Error: La carpeta '{audio_folder}' no existe. Cambiar el path.")
+else:
+    for filename in os.listdir(audio_folder):
+        if filename.endswith(".wav"):
+            filepath = os.path.join(audio_folder, filename)
+
+            # Extracción del nombre (toca ver que)
+            try:
+                label = filename.split('_')[0] # Toca cambiarlo dependiendo de la estructura del nombre
+            except IndexError:
+                label = "unknown_label" # Error
+
+            try:
+                # Cargar el archivo de audio con sr
+                y, current_sr = librosa.load(filepath, sr=sr)
+
+                # Calcular segementos de 3 segundos (no sé cómo estaba pensado para la transformación)
+                samples_per_segment = int(segment_length_sec * current_sr)
+
+                # Segmentar el audio
+                num_segments = len(y) // samples_per_segment
+
+                segments_list = []
+                for i in range(num_segments):
+                    start_sample = i * samples_per_segment
+                    end_sample = start_sample + samples_per_segment
+                    segment = y[start_sample:end_sample]
+
+                    segments_list.append({
+                        'segment': segment,
+                        'event_type': label
+                    })
+
+                processed_audio_data[filename] = segments_list
+                print(f"Se han procesado {len(segments_list)} segmentos de {filename} (label: '{label}').")
+
+            except Exception as e:
+                print(f"Error procesando {filename}: {e}")
+
+print(f"\nCompletado. Total de audios: {len(processed_audio_data)}")
+total_segments_count = sum(len(v) for v in processed_audio_data.values())
+print(f"Segmentos de 'processed_audio_data': {total_segments_count}")
 
 # ENTRADA --> processed_audio_data
 
