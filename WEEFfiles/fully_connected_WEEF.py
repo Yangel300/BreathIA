@@ -98,14 +98,13 @@ for audio_file_name, segments_list in processed_audio_data.items():
 
 # Convertir a numpy
 X = np.array(features)
-y = np.array(labels)
 
 print(f"Se extrajeron {X.shape[0]} samples con {X.shape[1]} features.")
 
 # Obtener los labels
 
 encoder = LabelEncoder()
-y_encoded = encoder.fit_transform(y)
+y_encoded = encoder.fit_transform(labels)
 num_classes = len(np.unique(y_encoded))
 print(encoder.classes_) # Verificar que leyó los nombres bien
 
