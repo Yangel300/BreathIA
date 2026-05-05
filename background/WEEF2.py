@@ -143,6 +143,8 @@ def process_sprsound_dataset(basepath, output_folder, counter):
         os.path.join(basepath, "BioCAS2024/test2024_wav"),
     ]
 
+    validation_wav_folder = os.path.join(basepath, "BioCAS2025/test2025_wav")
+
     json_mapping = {
         wav_folders[0]: [
             os.path.join(basepath, "BioCAS2022/test2022_json/inter_test_json"),
@@ -151,6 +153,8 @@ def process_sprsound_dataset(basepath, output_folder, counter):
         wav_folders[1]: [os.path.join(basepath, "BioCAS2022/train2022_json")],
         wav_folders[2]: [os.path.join(basepath, "BioCAS2023/test2023_json")],
         wav_folders[3]: [os.path.join(basepath, "BioCAS2024/test2024_json")],
+
+        validation_wav_folder: [os.path.join(basepath, "BioCAS2025/test2025_json")],
     }
 
     for wav_folder in wav_folders:
@@ -175,6 +179,31 @@ def process_sprsound_dataset(basepath, output_folder, counter):
                         _, counter = slice_audio_with_annotations(
                             audio_path, json_path, output_folder, counter
                         )
+    validation_output = os.path.join(os.path.dirname(output_folder),"Validation_Segments_wav")
+    ensure_dir(validation_output)
+
+    if os.path.exists(validation_wav_folder):
+        print(f"[INFO] Processing validation set: {validation_wav_folder}")
+
+        for root, _, files in os.walk(validation_wav_folder):
+            for file in files:
+                if file.endswith(".wav"):
+                    base = os.path.splitext(file)[0]
+                    audio_path = os.path.join(root, file)
+
+                    json_path = None
+                    for jf in json_mapping.get(validation_wav_folder, []):
+                        candidate = os.path.join(jf, base + ".json")
+                        if os.path.exists(candidate):
+                            json_path = candidate
+                            break
+
+                    if json_path:
+                        _, counter = slice_audio_with_annotations(
+                            audio_path, json_path, validation_output, counter
+                        )
+    else:
+        print(f"[WARN] Missing validation folder: {validation_wav_folder}")
 
     return counter
 
@@ -298,11 +327,10 @@ def run_slicing(output_folder, sprsound_path=None):
     print(f"[DONE] Total segments: {counter}")
 
     return counter
-
-
 # =========================================
 # ENTRYPOINT
 # =========================================
 if __name__ == "__main__":
     OUTPUT = os.path.join(CURRENT_DIR, "Segments_wav_4")
     run_slicing(OUTPUT)
+
