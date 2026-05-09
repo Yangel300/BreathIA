@@ -4,12 +4,11 @@ from collections import Counter
 EVENT_TYPES = [
     "Normal",
     "Wheeze",
-    "Crackle",
     "wheeze+crackle",
     "Rhonchi",
     "Stridor",
-    "Fine Crackle",
-    "Coarse Crackle"
+    "Fine_Crackle",
+    "Coarse_Crackle"
 ]
 
 
@@ -38,3 +37,6 @@ def run_analysis(folder):
     print(f"Total files: {sum(counter.values()) + unknown}")
 
     return counter, unknown
+
+if __name__ == "__main__":
+    run_analysis(r"C:\Users\Oficina 01\Documents\Breath\BreathIA\raw_dataset_with_rules")
