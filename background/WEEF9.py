@@ -1,273 +1,382 @@
 import os
-import cv2
-import librosa
+import torch
+import torchaudio
+import torchaudio.transforms as T
 import numpy as np
+import matplotlib.pyplot as plt
+
+from torch import nn
+from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
-from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.applications import EfficientNetB0
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import EarlyStopping
+from sklearn.metrics import confusion_matrix, classification_report
 
 # =========================================================
 # CONFIGURATION
 # =========================================================
 
 training_path = r"C:\Users\ADMIN\Documents\BreathIA\balanced_dataset"
+
 validation_path = r"C:\Users\ADMIN\Documents\BreathIA\Validation_Segments_wav"
 
-IMG_SIZE = 224
-
 sr = 22050
+
 n_mels = 128
-n_fft = 2048
-hop_length = 512
+
+batch_size = 16
+
+epochs = 200
+
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
+
+print(f"\nUsing device: {device}")
 
 # =========================================================
-# FUNCTION:
-# CREATE MEL-SPECTROGRAM IMAGE
+# LABELS
 # =========================================================
 
-def mel_to_image(y, sr):
-
-    # =============================================
-    # MEL SPECTROGRAM
-    # =============================================
-
-    mel = librosa.feature.melspectrogram(
-        y=y,
-        sr=sr,
-        n_fft=n_fft,
-        hop_length=hop_length,
-        n_mels=n_mels
-    )
-
-    mel_db = librosa.power_to_db(mel, ref=np.max)
-
-    # =============================================
-    # NORMALIZE 0-255
-    # =============================================
-
-    img = (mel_db - mel_db.min()) / (mel_db.max() - mel_db.min() + 1e-8)
-
-    img = (img * 255).astype(np.uint8)
-
-    # =============================================
-    # RESIZE
-    # =============================================
-
-    resized_img = cv2.resize(
-        img,
-        (IMG_SIZE, IMG_SIZE),
-        interpolation=cv2.INTER_AREA
-    )
-
-    # =============================================
-    # CONVERT TO RGB
-    # =============================================
-
-    import matplotlib.cm as cm
-
-    colored = cm.jet(resized_img / 255.0)
-
-    rgb_img = colored[:, :, :3]
-
-    # Normalize to 0-1
-    rgb_img = rgb_img.astype(np.float32) / 255.0
-
-    return rgb_img
-
-# =========================================================
-# FUNCTION:
-# LOAD DATASET
-# =========================================================
-
-def load_dataset(folder_path):
-
-    X = []
-    y_labels = []
-
-    print(f"\nProcessing folder: {folder_path}")
-
-    for filename in os.listdir(folder_path):
-
-        if not filename.lower().endswith(".wav"):
-            continue
-
-        filepath = os.path.join(folder_path, filename)
-
-        try:
-
-            # =========================================
-            # LOAD AUDIO
-            # =========================================
-
-            y_audio, _ = librosa.load(filepath, sr=sr)
-
-            # =========================================
-            # CREATE MEL IMAGE
-            # =========================================
-
-            mel_image = mel_to_image(y_audio, sr)
-
-            # =========================================
-            # EXTRACT LABEL
-            # =========================================
-
-            # concat_000002_Crackle.wav
-
-            label = filename.replace(".wav", "").split("_")[-1]
-
-            # =========================================
-            # SAVE
-            # =========================================
-
-            X.append(mel_image)
-            y_labels.append(label)
-
-            print(f"Processed: {filename}")
-
-        except Exception as e:
-            print(f"Error processing {filename}: {e}")
-
-    return np.array(X), np.array(y_labels)
-
-# =========================================================
-# LOAD TRAINING DATA
-# =========================================================
-
-X_train, y_train_labels = load_dataset(training_path)
-
-# =========================================================
-# LOAD VALIDATION DATA
-# =========================================================
-
-X_val, y_val_labels = load_dataset(validation_path)
-
-# =========================================================
-# LABEL ENCODING
-# =========================================================
+labels = ["Crackle", "Normal", "Wheeze"]
 
 label_encoder = LabelEncoder()
 
-all_labels = np.concatenate([y_train_labels, y_val_labels])
+label_encoder.fit(labels)
 
-label_encoder.fit(all_labels)
-
-y_train = label_encoder.transform(y_train_labels)
-y_val = label_encoder.transform(y_val_labels)
-
-# One-hot encoding
-num_classes = len(label_encoder.classes_)
-
-y_train = to_categorical(y_train, num_classes=num_classes)
-y_val = to_categorical(y_val, num_classes=num_classes)
-
-print("\nClasses:")
-print(label_encoder.classes_)
+num_classes = len(labels)
 
 # =========================================================
-# LOAD EFFICIENTNETB0
+# MEL TRANSFORM
 # =========================================================
 
-base_model = EfficientNetB0(
-    weights='imagenet',
-    include_top=False,
-    input_shape=(IMG_SIZE, IMG_SIZE, 3)
+mel_transform = T.MelSpectrogram(
+    sample_rate=sr,
+    n_fft=2048,
+    hop_length=512,
+    n_mels=n_mels
 )
 
-# Freeze layers
-for layer in base_model.layers[:-20]:
-    layer.trainable = False
-
-for layer in base_model.layers[-20:]:
-    layer.trainable = True
+db_transform = T.AmplitudeToDB()
 
 # =========================================================
-# CUSTOM CLASSIFIER
+# DATASET
 # =========================================================
 
-x = base_model.output
+class BreathDataset(Dataset):
 
-x = GlobalAveragePooling2D()(x)
+    def __init__(self, folder):
 
-x = Dense(256, activation='relu')(x)
+        self.folder = folder
 
-x = Dropout(0.3)(x)
+        self.files = [
+            f for f in os.listdir(folder)
+            if f.lower().endswith(".wav")
+        ]
 
-predictions = Dense(
-    num_classes,
-    activation='softmax'
-)(x)
+    def __len__(self):
 
-model = Model(
-    inputs=base_model.input,
-    outputs=predictions
+        return len(self.files)
+
+    def __getitem__(self, idx):
+
+        filename = self.files[idx]
+
+        filepath = os.path.join(self.folder, filename)
+
+        # =============================================
+        # LOAD AUDIO
+        # =============================================
+
+        waveform, original_sr = torchaudio.load(filepath)
+
+        # Mono
+        if waveform.shape[0] > 1:
+            waveform = torch.mean(
+                waveform,
+                dim=0,
+                keepdim=True
+            )
+
+        # =============================================
+        # RESAMPLE
+        # =============================================
+
+        if original_sr != sr:
+
+            resampler = T.Resample(
+                orig_freq=original_sr,
+                new_freq=sr
+            )
+
+            waveform = resampler(waveform)
+
+        # =============================================
+        # FIX LENGTH TO 3 SECONDS
+        # =============================================
+
+        target_length = sr * 3
+
+        if waveform.shape[1] < target_length:
+
+            pad_size = target_length - waveform.shape[1]
+
+            waveform = torch.nn.functional.pad(
+                waveform,
+                (0, pad_size)
+            )
+
+        else:
+
+            waveform = waveform[:, :target_length]
+
+        # =============================================
+        # MEL SPECTROGRAM
+        # =============================================
+
+        mel = mel_transform(waveform)
+
+        mel_db = db_transform(mel)
+
+        # =============================================
+        # NORMALIZE
+        # =============================================
+
+        mel_db = (mel_db - mel_db.mean()) / (
+            mel_db.std() + 1e-8
+        )
+
+        # =============================================
+        # LABEL
+        # =============================================
+
+        label_name = filename.replace(
+            ".wav",
+            ""
+        ).split("_")[-1]
+
+        label = label_encoder.transform(
+            [label_name]
+        )[0]
+
+        return mel_db, label
+
+# =========================================================
+# LOADERS
+# =========================================================
+
+train_dataset = BreathDataset(training_path)
+
+val_dataset = BreathDataset(validation_path)
+
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=batch_size,
+    shuffle=True
+)
+
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=batch_size,
+    shuffle=False
 )
 
 # =========================================================
-# COMPILE MODEL
+# SIMPLE CNN
+# =========================================================
+class SimpleAudioCNN(nn.Module):
+
+    def __init__(self):
+
+        super(SimpleAudioCNN, self).__init__()
+
+        # =================================================
+        # FEATURE EXTRACTOR
+        # =================================================
+
+        self.features = nn.Sequential(
+
+            nn.Conv2d(
+                in_channels=1,
+                out_channels=10,
+                kernel_size=(3, 3),
+                stride=1,
+                padding=0
+            ),
+
+            nn.BatchNorm2d(10),
+
+            nn.ReLU(),
+
+            nn.Dropout(0.2),
+
+            nn.MaxPool2d(
+                kernel_size=(5, 5),
+                stride=(5, 5)
+            )
+        )
+
+        # =================================================
+        # AUTOMATIC FLATTEN SIZE
+        # =================================================
+
+        dummy = torch.zeros(1, 1, 128, 130)
+
+        dummy_output = self.features(dummy)
+
+        flatten_size = dummy_output.reshape(1, -1).shape[1]
+
+        print(f"Flatten size: {flatten_size}")
+
+        # =================================================
+        # CLASSIFIER
+        # =================================================
+
+        self.classifier = nn.Sequential(
+
+            nn.Flatten(),
+
+            nn.Linear(
+                flatten_size,
+                100
+            ),
+
+            nn.ReLU(),
+
+            nn.Linear(
+                100,
+                num_classes
+            )
+        )
+
+    # =====================================================
+    # FORWARD
+    # =====================================================
+
+    def forward(self, x):
+
+        x = self.features(x)
+
+        x = self.classifier(x)
+
+        return x
+
+# =========================================================
+# CHECK MEL SHAPE
 # =========================================================
 
-model.compile(
-    optimizer=Adam(learning_rate=1e-4),
-    loss='categorical_crossentropy',
-    metrics=['accuracy']
-)
+sample_mel, _ = train_dataset[0]
 
-model.summary()
+print(f"\nSample mel shape: {sample_mel.shape}")
+
+# =========================================================
+# CREATE MODEL
+# =========================================================
+
+model = SimpleAudioCNN().to(device)
+
+print(model)
+
+# =========================================================
+# LOSS AND OPTIMIZER
+# =========================================================
+
+criterion = nn.CrossEntropyLoss()
+
+optimizer = torch.optim.Adam(
+    model.parameters(),
+    lr=0.001
+)
 
 # =========================================================
 # TRAIN
 # =========================================================
 
-early_stop = EarlyStopping(
-    monitor='val_loss',
-    patience=5,
-    restore_best_weights=True
-)
+for epoch in range(epochs):
 
-history = model.fit(
-    X_train,
-    y_train,
-    validation_data=(X_val, y_val),
-    epochs=5,
-    batch_size=16,
-    callbacks=[early_stop]
-)
+    model.train()
 
+    running_loss = 0
+
+    correct = 0
+
+    total = 0
+
+    for mel, labels_batch in train_loader:
+
+        mel = mel.to(device)
+
+        labels_batch = labels_batch.to(device)
+
+        # =============================================
+        # FORWARD
+        # =============================================
+
+        outputs = model(mel)
+
+        loss = criterion(outputs, labels_batch)
+
+        # =============================================
+        # BACKPROP
+        # =============================================
+
+        optimizer.zero_grad()
+
+        loss.backward()
+
+        optimizer.step()
+
+        # =============================================
+        # METRICS
+        # =============================================
+
+        running_loss += loss.item()
+
+        _, predicted = torch.max(outputs, 1)
+
+        total += labels_batch.size(0)
+
+        correct += (
+            predicted == labels_batch
+        ).sum().item()
+
+    accuracy = correct / total
+
+    print(
+        f"\nEpoch [{epoch+1}/{epochs}] "
+        f"Loss: {running_loss:.4f} "
+        f"Accuracy: {accuracy:.4f}"
+    )
 # =========================================================
-# SAVE MODEL
+# VALIDATION
 # =========================================================
 
-model.save("efficientnet_b0_breathia.keras")
+model.eval()
 
-print("\nModel saved as efficientnet_b0_breathia.keras")
+all_preds = []
 
-from sklearn.metrics import confusion_matrix
-from sklearn.metrics import classification_report
-import matplotlib.pyplot as plt
-import numpy as np
+all_labels = []
 
-# =========================================================
-# PREDICTIONS
-# =========================================================
+with torch.no_grad():
 
-y_pred_probs = model.predict(X_val)
+    for mel, labels_batch in val_loader:
 
-# Convert probabilities to class index
-y_pred = np.argmax(y_pred_probs, axis=1)
+        mel = mel.to(device)
 
-# Convert one-hot validation labels
-y_true = np.argmax(y_val, axis=1)
+        outputs = model(mel)
+
+        _, predicted = torch.max(outputs, 1)
+
+        all_preds.extend(predicted.cpu().numpy())
+
+        all_labels.extend(labels_batch.numpy())
 
 # =========================================================
 # CONFUSION MATRIX
 # =========================================================
 
-cm = confusion_matrix(y_true, y_pred)
+cm = confusion_matrix(
+    all_labels,
+    all_preds
+)
 
 print("\nConfusion Matrix:")
 print(cm)
@@ -276,14 +385,13 @@ print(cm)
 # CLASSIFICATION REPORT
 # =========================================================
 
-class_names = label_encoder.classes_
-
 print("\nClassification Report:")
+
 print(
     classification_report(
-        y_true,
-        y_pred,
-        target_names=class_names
+        all_labels,
+        all_preds,
+        target_names=label_encoder.classes_
     )
 )
 
@@ -299,17 +407,26 @@ plt.title("Confusion Matrix")
 
 plt.colorbar()
 
-tick_marks = np.arange(len(class_names))
+tick_marks = np.arange(len(labels))
 
-plt.xticks(tick_marks, class_names, rotation=45)
-plt.yticks(tick_marks, class_names)
+plt.xticks(
+    tick_marks,
+    label_encoder.classes_,
+    rotation=45
+)
+
+plt.yticks(
+    tick_marks,
+    label_encoder.classes_
+)
 
 plt.xlabel("Predicted")
+
 plt.ylabel("True")
 
-# Numbers inside cells
 for i in range(cm.shape[0]):
     for j in range(cm.shape[1]):
+
         plt.text(
             j,
             i,
@@ -321,4 +438,3 @@ for i in range(cm.shape[0]):
 plt.tight_layout()
 
 plt.show()
-
