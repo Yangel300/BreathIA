@@ -2,21 +2,43 @@ import os
 import random
 import numpy as np
 import soundfile as sf
-from scipy.signal import resample
+
+from scipy.signal import (
+    resample,
+    butter,
+    lfilter
+)
+
 from collections import Counter
 
 # =========================================================
 # CONFIG
 # =========================================================
 
-INPUT_FOLDER = r"C:\Users\Oficina 01\Documents\Breath\BreathIA\raw_dataset_with_rules"
+INPUT_FOLDER = (
+    r"C:\Users\Oficina 01\Documents\Breath\BreathIA\raw_dataset_with_rules"
+)
 
-TARGET_COUNT = 4000
+OUTPUT_FOLDER = (
+    r"C:\Users\Oficina 01\Documents\Breath\BreathIA\augmentation_dataset_with_rules"
+)
 
 TARGET_SR = 22050
 
+# ---------------------------------------------------------
+# TARGET COUNTS
+# ---------------------------------------------------------
+
+TARGET_COUNTS = {
+    "Normal": 4200,
+    "Wheeze": 2200,
+    "Fine_Crackle": 3000
+}
+
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
 # =========================================================
-# LOAD FILES
+# LOAD DATASET
 # =========================================================
 
 segments = []
@@ -41,14 +63,16 @@ for file in os.listdir(INPUT_FOLDER):
         # Resample
         if sr != TARGET_SR:
 
-            new_length = int(len(audio) * TARGET_SR / sr)
+            new_length = int(
+                len(audio) * TARGET_SR / sr
+            )
 
             audio = resample(audio, new_length)
 
             sr = TARGET_SR
 
         # -------------------------------------------------
-        # LABEL
+        # LABELS
         # -------------------------------------------------
 
         name = file.lower()
@@ -61,15 +85,6 @@ for file in os.listdir(INPUT_FOLDER):
 
         elif "fine_crackle" in name:
             label = "Fine_Crackle"
-
-        elif "coarse_crackle" in name:
-            label = "Coarse_Crackle"
-
-        elif "rhonchi" in name:
-            label = "Rhonchi"
-
-        elif "stridor" in name:
-            label = "Stridor"
 
         else:
             continue
@@ -85,7 +100,7 @@ for file in os.listdir(INPUT_FOLDER):
         print(f"ERROR loading {file}")
         print(e)
 
-print(f"\nLoaded: {len(segments)} files")
+print(f"\nLoaded files: {len(segments)}")
 
 # =========================================================
 # COUNTS
@@ -93,125 +108,304 @@ print(f"\nLoaded: {len(segments)} files")
 
 counts = Counter([s["label"] for s in segments])
 
-print("\nCounts per class:\n")
+print("\nOriginal counts:\n")
 
 for k, v in counts.items():
     print(f"{k}: {v}")
 
 # =========================================================
-# AUGMENTATION
+# SAVE ORIGINALS WITH UNDERSAMPLING
 # =========================================================
 
-def augment(audio):
+print("\nSaving balanced originals...\n")
 
-    y = audio.copy()
+saved_counter = 1
 
-    aug_type = random.choice([
-        "noise",
-        "gain",
-        "stretch"
-    ])
+balanced_segments = []
+
+for label in TARGET_COUNTS.keys():
+
+    class_segments = [
+        s for s in segments
+        if s["label"] == label
+    ]
 
     # -----------------------------------------------------
-    # VERY LIGHT NOISE
+    # UNDERSAMPLING NORMAL
     # -----------------------------------------------------
 
-    if aug_type == "noise":
+    if len(class_segments) > TARGET_COUNTS[label]:
 
-        noise_amp = random.uniform(
-            0.0002,
-            0.002
+        class_segments = random.sample(
+            class_segments,
+            TARGET_COUNTS[label]
         )
 
-        noise = noise_amp * np.random.randn(len(y))
+    balanced_segments.extend(class_segments)
 
-        y = y + noise
+# Save originals
+for seg in balanced_segments:
 
-    # -----------------------------------------------------
-    # LIGHT GAIN
-    # -----------------------------------------------------
+    filename = (
+        f"sample_{saved_counter:06d}_{seg['label']}.wav"
+    )
 
-    elif aug_type == "gain":
+    output_path = os.path.join(
+        OUTPUT_FOLDER,
+        filename
+    )
 
-        gain = random.uniform(
-            0.9,
-            1.1
-        )
+    y = seg["audio"]
 
-        y = y * gain
-
-    # -----------------------------------------------------
-    # VERY LIGHT STRETCH
-    # -----------------------------------------------------
-
-    elif aug_type == "stretch":
-
-        rate = random.uniform(
-            0.97,
-            1.03
-        )
-
-        new_length = int(len(y) / rate)
-
-        y = resample(y, new_length)
-
-        target_length = TARGET_SR * 3
-
-        if len(y) > target_length:
-
-            y = y[:target_length]
-
-        else:
-
-            pad = target_length - len(y)
-
-            y = np.pad(y, (0, pad))
-
-    # Normalize
     y = y / (np.max(np.abs(y)) + 1e-9)
+
+    sf.write(
+        output_path,
+        y,
+        TARGET_SR
+    )
+
+    saved_counter += 1
+
+# =========================================================
+# AUGMENTATIONS
+# =========================================================
+
+def add_noise(y):
+
+    noise_amp = random.uniform(
+        0.0002,
+        0.002
+    )
+
+    noise = noise_amp * np.random.randn(len(y))
+
+    return y + noise
+
+
+def gain(y):
+
+    g = random.uniform(
+        0.9,
+        1.1
+    )
+
+    return y * g
+
+
+def stretch(y):
+
+    rate = random.uniform(
+        0.97,
+        1.03
+    )
+
+    new_length = int(len(y) / rate)
+
+    y2 = resample(y, new_length)
+
+    target = TARGET_SR * 3
+
+    if len(y2) > target:
+        y2 = y2[:target]
+
+    else:
+        y2 = np.pad(
+            y2,
+            (0, target - len(y2))
+        )
+
+    return y2
+
+
+# ---------------------------------------------------------
+# BANDPASS PERTURBATION
+# ---------------------------------------------------------
+
+def bandpass_filter(y):
+
+    low = random.uniform(80, 150)
+    high = random.uniform(1200, 2200)
+
+    nyquist = TARGET_SR / 2
+
+    low = low / nyquist
+    high = high / nyquist
+
+    b, a = butter(
+        4,
+        [low, high],
+        btype='band'
+    )
+
+    return lfilter(b, a, y)
+
+
+# ---------------------------------------------------------
+# FREQUENCY MASKING
+# ---------------------------------------------------------
+
+def frequency_mask(y):
+
+    Y = np.fft.rfft(y)
+
+    n = len(Y)
+
+    start = random.randint(
+        0,
+        int(n * 0.7)
+    )
+
+    width = random.randint(
+        int(n * 0.01),
+        int(n * 0.05)
+    )
+
+    Y[start:start+width] = 0
+
+    return np.fft.irfft(Y)
+
+
+# ---------------------------------------------------------
+# TIME MASKING
+# ---------------------------------------------------------
+
+def time_mask(y):
+
+    y = y.copy()
+
+    length = len(y)
+
+    mask_size = random.randint(
+        int(length * 0.01),
+        int(length * 0.05)
+    )
+
+    start = random.randint(
+        0,
+        length - mask_size
+    )
+
+    y[start:start+mask_size] = 0
 
     return y
 
+
+# ---------------------------------------------------------
+# RESPIRATORY ENVELOPE MODULATION
+# ---------------------------------------------------------
+
+def respiratory_modulation(y):
+
+    t = np.linspace(
+        0,
+        1,
+        len(y)
+    )
+
+    freq = random.uniform(
+        0.1,
+        0.4
+    )
+
+    envelope = (
+        0.75 +
+        0.25 * np.sin(
+            2 * np.pi * freq * t
+        )
+    )
+
+    return y * envelope
+
+
 # =========================================================
-# SAVE AUGMENTED
+# MAIN AUGMENT FUNCTION
+# =========================================================
+
+AUGMENTS = [
+    add_noise,
+    gain,
+    stretch,
+    bandpass_filter,
+    frequency_mask,
+    time_mask,
+    respiratory_modulation
+]
+
+def augment(y):
+
+    y_aug = y.copy()
+
+    n_aug = random.randint(2, 4)
+
+    chosen = random.sample(
+        AUGMENTS,
+        n_aug
+    )
+
+    for aug in chosen:
+
+        try:
+            y_aug = aug(y_aug)
+
+        except Exception:
+            pass
+
+    # Normalize
+    y_aug = y_aug / (
+        np.max(np.abs(y_aug)) + 1e-9
+    )
+
+    return y_aug
+
+
+# =========================================================
+# AUGMENT MINORITY CLASSES
 # =========================================================
 
 print("\nStarting augmentation...\n")
 
-counter = len(os.listdir(INPUT_FOLDER)) + 1
+balanced_counts = Counter([
+    s["label"] for s in balanced_segments
+])
 
-for label, current_count in counts.items():
+for label, target in TARGET_COUNTS.items():
+
+    current = balanced_counts[label]
 
     print("=" * 50)
-    print(f"{label}")
-    print(f"Current: {current_count}")
+    print(label)
+    print(f"Current: {current}")
+    print(f"Target:  {target}")
 
-    if current_count >= TARGET_COUNT:
+    if current >= target:
 
-        print("Skipping")
+        print("Already balanced")
         continue
 
-    needed = TARGET_COUNT - current_count
+    needed = target - current
 
     print(f"Generating: {needed}")
 
     candidates = [
-        s for s in segments
+        s for s in balanced_segments
         if s["label"] == label
     ]
 
     for i in range(needed):
 
-        sample = random.choice(candidates)
+        original = random.choice(candidates)
 
-        augmented = augment(sample["audio"])
+        augmented = augment(
+            original["audio"]
+        )
 
         filename = (
-            f"sample_{counter:06d}_{label}.wav"
+            f"sample_{saved_counter:06d}_{label}.wav"
         )
 
         output_path = os.path.join(
-            INPUT_FOLDER,
+            OUTPUT_FOLDER,
             filename
         )
 
@@ -221,7 +415,7 @@ for label, current_count in counts.items():
             TARGET_SR
         )
 
-        counter += 1
+        saved_counter += 1
 
         if i % 100 == 0:
 
@@ -230,4 +424,28 @@ for label, current_count in counts.items():
                 f"{i}/{needed}"
             )
 
-print("\nDONE")
+# =========================================================
+# FINAL COUNTS
+# =========================================================
+
+print("\nDONE\n")
+
+final_counter = Counter()
+
+for file in os.listdir(OUTPUT_FOLDER):
+
+    name = file.lower()
+
+    if "normal" in name:
+        final_counter["Normal"] += 1
+
+    elif "wheeze" in name:
+        final_counter["Wheeze"] += 1
+
+    elif "fine_crackle" in name:
+        final_counter["Fine_Crackle"] += 1
+
+print("Final counts:\n")
+
+for k, v in final_counter.items():
+    print(f"{k}: {v}")
