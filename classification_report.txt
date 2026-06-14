@@ -1,0 +1,9 @@
+              precision    recall  f1-score   support
+
+Fine_Crackle       0.84      0.89      0.86       502
+      Normal       0.91      0.84      0.87       644
+      Wheeze       0.76      0.96      0.85        81
+
+    accuracy                           0.87      1227
+   macro avg       0.84      0.90      0.86      1227
+weighted avg       0.87      0.87      0.87      1227
