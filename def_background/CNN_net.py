@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import soundfile as sf
 import librosa
 import torch
-
+import joblib
 from scipy.signal import resample
 
 from torch import nn
@@ -68,7 +68,7 @@ n_mels = 64
 
 batch_size = 8
 
-epochs = 250
+epochs = 280
 
 # =========================================================
 # LABELS
@@ -618,3 +618,5 @@ plt.ylabel("Accuracy")
 plt.grid()
 
 plt.show()
+
+joblib.dump(model, 'alpha3.pkl')
